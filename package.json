@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node scripts/start-local.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "whisper-proxy": "node scripts/whisper-proxy.mjs"
   }
