@@ -87,6 +87,7 @@ export async function saveSessionFiles({
   reflectionMarkdown,
   metadata,
   reflectionAudioFiles = {},
+  transcriptMarkdown = null,
 }) {
   const hasPermission = await ensureReadWritePermission(directoryHandle);
   if (!hasPermission) {
@@ -98,14 +99,21 @@ export async function saveSessionFiles({
   await writeFile(sessionFolder, 'answer.webm', audioBlob);
   await writeFile(sessionFolder, 'reflection.md', reflectionMarkdown);
 
+  const optionalFiles = [];
+  if (transcriptMarkdown) {
+    await writeFile(sessionFolder, 'answer-transcript.md', transcriptMarkdown);
+    optionalFiles.push('answer-transcript.md');
+  }
+
   for (const { fileName, blob } of Object.values(reflectionAudioFiles)) {
     await writeFile(sessionFolder, fileName, blob);
+    optionalFiles.push(fileName);
   }
 
   await writeFile(sessionFolder, 'metadata.json', JSON.stringify(metadata, null, 2));
 
   return {
     sessionId,
-    files: [...REQUIRED_FILES, ...Object.values(reflectionAudioFiles).map(({ fileName }) => fileName)],
+    files: [...REQUIRED_FILES, ...optionalFiles],
   };
 }

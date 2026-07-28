@@ -5,11 +5,13 @@ import {
   MODULES,
   REFLECTION_AUDIO_FILES,
   TIMING,
+  TRANSCRIPT_FILE_NAME,
   buildAudioSegments,
   buildMetadata,
   createQuestionText,
   createReflectionMarkdown,
   createSessionId,
+  formatAnswerTranscriptMarkdown,
   getPhaseSequence,
   hasRequiredSetupInputs,
   parseStructuredStationText,
@@ -126,7 +128,7 @@ test('builds metadata with required file names, timing values, and answer segmen
   });
 
   assert.deepEqual(metadata.timing, {
-    scenarioReadSeconds: 30,
+    scenarioReadSeconds: 60,
     questionPrepSeconds: 15,
     answerSeconds: 60,
     questionCount: 4,
@@ -142,6 +144,56 @@ test('builds metadata with required file names, timing values, and answer segmen
     q3: { startSeconds: 150, endSeconds: 210 },
     q4: { startSeconds: 225, endSeconds: 285 },
   });
+});
+
+test('builds metadata with ready transcript file references', () => {
+  const metadata = buildMetadata({
+    sessionId: '2026-08-12_09-30_ethics-decision-making_friend-stealing-at-work',
+    createdAtIso: '2026-08-12T19:30:00+10:00',
+    module: 'Ethics / Decision-Making',
+    stationTitle: 'Friend stealing at work',
+    transcript: {
+      status: 'ready',
+      provider: 'openai-whisper',
+      model: 'whisper-1',
+    },
+  });
+
+  assert.equal(metadata.files.transcript, TRANSCRIPT_FILE_NAME);
+  assert.deepEqual(metadata.transcript, {
+    status: 'ready',
+    provider: 'openai-whisper',
+    model: 'whisper-1',
+  });
+});
+
+test('builds metadata with failed transcript status and no transcript file', () => {
+  const metadata = buildMetadata({
+    sessionId: '2026-08-12_09-30_ethics-decision-making_friend-stealing-at-work',
+    createdAtIso: '2026-08-12T19:30:00+10:00',
+    module: 'Ethics / Decision-Making',
+    transcript: {
+      status: 'failed',
+      provider: 'openai-whisper',
+      model: 'whisper-1',
+      error: 'proxy down',
+    },
+  });
+
+  assert.equal(metadata.files.transcript, undefined);
+  assert.deepEqual(metadata.transcript, {
+    status: 'failed',
+    provider: 'openai-whisper',
+    model: 'whisper-1',
+    error: 'proxy down',
+  });
+});
+
+test('formats answer transcript markdown from Whisper text', () => {
+  assert.equal(
+    formatAnswerTranscriptMarkdown({ text: 'I would speak privately first.' }),
+    ['# Answer Transcript', '', 'I would speak privately first.', ''].join('\n'),
+  );
 });
 
 test('builds metadata with optional reflection audio file references', () => {
@@ -164,11 +216,12 @@ test('builds metadata with optional reflection audio file references', () => {
 
 test('exposes the exact fixed timing phase sequence', () => {
   assert.deepEqual(TIMING, {
-    scenarioReadSeconds: 30,
+    scenarioReadSeconds: 60,
     questionPrepSeconds: 15,
     answerSeconds: 60,
     questionCount: 4,
   });
+  assert.equal(getPhaseSequence()[0].durationSeconds, 60);
   assert.deepEqual(
     getPhaseSequence().map((phase) => phase.id),
     [
