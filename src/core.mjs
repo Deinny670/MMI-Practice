@@ -47,11 +47,13 @@ export const MODULES = [
 ];
 
 export const TIMING = {
-  scenarioReadSeconds: 30,
+  scenarioReadSeconds: 60,
   questionPrepSeconds: 15,
   answerSeconds: 60,
   questionCount: 4,
 };
+
+export const TRANSCRIPT_FILE_NAME = 'answer-transcript.md';
 
 export const REFLECTION_PROMPTS = {
   summary: 'Briefly summarize how you approached this station.',
@@ -216,7 +218,14 @@ export function buildAudioSegments() {
   }).reduce((segments, [key, value]) => ({ ...segments, [key]: value }), {});
 }
 
-export function buildMetadata({ sessionId, createdAtIso, module, stationTitle = '', reflectionAudioFiles = {} }) {
+export function buildMetadata({
+  sessionId,
+  createdAtIso,
+  module,
+  stationTitle = '',
+  reflectionAudioFiles = {},
+  transcript = null,
+} = {}) {
   const files = {
     question: 'question.txt',
     audio: 'answer.webm',
@@ -227,7 +236,11 @@ export function buildMetadata({ sessionId, createdAtIso, module, stationTitle = 
     files.reflectionAudio = reflectionAudioFiles;
   }
 
-  return {
+  if (transcript?.status === 'ready') {
+    files.transcript = TRANSCRIPT_FILE_NAME;
+  }
+
+  const metadata = {
     sessionId,
     createdAt: createdAtIso,
     module,
@@ -236,6 +249,22 @@ export function buildMetadata({ sessionId, createdAtIso, module, stationTitle = 
     files,
     audioSegments: buildAudioSegments(),
   };
+
+  if (transcript) {
+    metadata.transcript = {
+      status: transcript.status,
+      provider: transcript.provider ?? 'openai-whisper',
+      model: transcript.model ?? 'whisper-1',
+      ...(transcript.error ? { error: transcript.error } : {}),
+    };
+  }
+
+  return metadata;
+}
+
+export function formatAnswerTranscriptMarkdown({ text = '' } = {}) {
+  const body = String(text ?? '').trim();
+  return ['# Answer Transcript', '', body, ''].join('\n');
 }
 
 export function getPhaseSequence() {

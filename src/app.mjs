@@ -3,10 +3,13 @@ import {
   REFLECTION_PROMPTS,
   REFLECTION_AUDIO_FILES,
   STATION_TEXT_TEMPLATE,
+  TRANSCRIPT_FILE_NAME,
+  buildAudioSegments,
   buildMetadata,
   createQuestionText,
   createReflectionMarkdown,
   createSessionId,
+  formatAnswerTranscriptMarkdown,
   getPhaseSequence,
   hasRequiredSetupInputs,
   parseStructuredStationText,
@@ -18,6 +21,11 @@ import {
   rememberSaveDirectoryHandle,
   saveSessionFiles,
 } from './storage.mjs';
+import {
+  loadOpenAiConfig,
+  resolveWhisperAvailability,
+  transcribeAudioWithWhisper,
+} from './whisper.mjs';
 
 const app = document.querySelector('#app');
 const phases = getPhaseSequence();
@@ -59,6 +67,17 @@ const state = {
   reflectionRecorder: null,
   reflectionStream: null,
   reflectionChunks: [],
+  answerAudioUrl: null,
+  reviewAudioTime: 0,
+  transcript: {
+    status: 'unavailable',
+    text: '',
+    markdown: '',
+    error: '',
+    model: 'whisper-1',
+    provider: 'openai-whisper',
+  },
+  transcriptRequestId: 0,
 };
 
 function setStatus(message) {
@@ -234,6 +253,7 @@ function recordingStatusText(phase) {
 }
 
 function renderReflection() {
+  persistReviewAudioPosition();
   app.innerHTML = `
     <header class="page-header">
       <button type="button" class="secondary" data-action="back-home">Back to Home</button>
@@ -249,6 +269,7 @@ function renderReflection() {
       <p><strong>Completion time:</strong> ${escapeHtml(state.completedAt?.toLocaleString() ?? '')}</p>
       <p><strong>Recording:</strong> ${state.audioBlob ? 'Recording complete' : 'Recording finalising'}</p>
     </section>
+    ${renderResponseReview()}
     <form class="panel form-grid" data-form="reflection">
       ${Object.entries(REFLECTION_PROMPTS).map(
         ([key, prompt]) => `
@@ -273,10 +294,210 @@ function renderReflection() {
       <div class="action-row">
         <button type="button" data-action="save-session" ${state.audioBlob ? '' : 'disabled'}>Save Session</button>
         <button type="button" class="secondary" data-action="back-home">Back to Home</button>
-        <p class="muted">Saving writes the station files and any recorded voice reflections.</p>
+        <p class="muted">Saving writes the station files, transcript when ready, and any recorded voice reflections.</p>
       </div>
     </form>
   `;
+  restoreReviewAudioPosition();
+}
+
+function renderResponseReview() {
+  const segments = buildAudioSegments();
+  const questions = state.station.questions ?? [];
+  return `
+    <section class="panel response-review" aria-labelledby="response-review-title">
+      <div>
+        <h2 id="response-review-title">Response Review</h2>
+        <p class="muted">Replay your spoken answers and read the transcript before saving.</p>
+      </div>
+      ${
+        state.answerAudioUrl
+          ? `
+            <audio id="answer-review-audio" controls src="${escapeHtml(state.answerAudioUrl)}"></audio>
+            <div class="segment-actions" role="group" aria-label="Jump to question answers">
+              ${[1, 2, 3, 4]
+                .map((questionNumber) => {
+                  const key = `q${questionNumber}`;
+                  const segment = segments[key];
+                  const questionText = questions[questionNumber - 1] || '';
+                  return `
+                    <button
+                      type="button"
+                      class="secondary segment-button"
+                      data-action="seek-answer-segment"
+                      data-start-seconds="${segment.startSeconds}"
+                      title="${escapeHtml(questionText)}"
+                    >
+                      Question ${questionNumber}
+                    </button>
+                  `;
+                })
+                .join('')}
+            </div>
+          `
+          : '<p class="message error">Spoken answers are unavailable for review.</p>'
+      }
+      <div class="transcript-review">
+        <h3>Transcript</h3>
+        <p class="transcript-status">${escapeHtml(transcriptStatusText())}</p>
+        ${
+          state.transcript.status === 'ready'
+            ? `<pre class="transcript-body">${escapeHtml(state.transcript.text)}</pre>`
+            : ''
+        }
+        ${
+          state.transcript.status === 'failed' || state.transcript.status === 'unavailable'
+            ? `<button type="button" class="secondary" data-action="retry-transcript">Retry transcript</button>`
+            : ''
+        }
+      </div>
+    </section>
+  `;
+}
+
+function transcriptStatusText() {
+  if (state.transcript.status === 'transcribing') return 'Transcribing...';
+  if (state.transcript.status === 'ready') return 'Transcript ready';
+  if (state.transcript.status === 'failed') {
+    return `Transcript failed${state.transcript.error ? `: ${state.transcript.error}` : '.'}`;
+  }
+  return state.transcript.error
+    ? `Transcript unavailable. ${state.transcript.error}`
+    : 'Transcript unavailable.';
+}
+
+function persistReviewAudioPosition() {
+  const audio = document.querySelector('#answer-review-audio');
+  if (audio && Number.isFinite(audio.currentTime)) {
+    state.reviewAudioTime = audio.currentTime;
+  }
+}
+
+function restoreReviewAudioPosition() {
+  const audio = document.querySelector('#answer-review-audio');
+  if (!audio) return;
+  const restore = () => {
+    if (Number.isFinite(state.reviewAudioTime) && state.reviewAudioTime > 0) {
+      try {
+        audio.currentTime = state.reviewAudioTime;
+      } catch {
+        // Ignore seek errors before metadata is ready.
+      }
+    }
+  };
+  if (audio.readyState >= 1) restore();
+  else audio.addEventListener('loadedmetadata', restore, { once: true });
+}
+
+function ensureAnswerAudioUrl() {
+  if (!state.audioBlob) return;
+  if (state.answerAudioUrl) URL.revokeObjectURL(state.answerAudioUrl);
+  state.answerAudioUrl = URL.createObjectURL(state.audioBlob);
+  state.reviewAudioTime = 0;
+}
+
+function clearAnswerAudioUrl() {
+  if (state.answerAudioUrl) {
+    URL.revokeObjectURL(state.answerAudioUrl);
+  }
+  state.answerAudioUrl = null;
+  state.reviewAudioTime = 0;
+}
+
+function resetTranscriptState(extra = {}) {
+  state.transcript = {
+    status: 'unavailable',
+    text: '',
+    markdown: '',
+    error: '',
+    model: 'whisper-1',
+    provider: 'openai-whisper',
+    ...extra,
+  };
+}
+
+async function startTranscription() {
+  if (!state.audioBlob) {
+    resetTranscriptState({ status: 'unavailable', error: 'Spoken answers are unavailable for transcription.' });
+    return;
+  }
+
+  const requestId = state.transcriptRequestId + 1;
+  state.transcriptRequestId = requestId;
+  state.transcript = {
+    ...state.transcript,
+    status: 'transcribing',
+    text: '',
+    markdown: '',
+    error: '',
+  };
+  if (state.screen === 'reflection') {
+    persistReflectionForm();
+    render();
+  }
+
+  try {
+    const config = await loadOpenAiConfig();
+    const availability = await resolveWhisperAvailability(config);
+    if (state.transcriptRequestId !== requestId) return;
+
+    if (!availability.available) {
+      resetTranscriptState({
+        status: 'unavailable',
+        error: availability.reason,
+        model: availability.config.model,
+      });
+      if (state.screen === 'reflection') {
+        persistReflectionForm();
+        render();
+      }
+      return;
+    }
+
+    const result = await transcribeAudioWithWhisper(state.audioBlob, availability.config);
+    if (state.transcriptRequestId !== requestId) return;
+
+    const markdown = formatAnswerTranscriptMarkdown({ text: result.text });
+    state.transcript = {
+      status: 'ready',
+      text: result.text,
+      markdown,
+      error: '',
+      model: result.model,
+      provider: result.provider,
+    };
+  } catch (error) {
+    if (state.transcriptRequestId !== requestId) return;
+    resetTranscriptState({
+      status: 'failed',
+      error: error?.message || 'Whisper transcription failed.',
+    });
+  }
+
+  if (state.screen === 'reflection') {
+    persistReflectionForm();
+    render();
+  }
+}
+
+function seekAnswerSegment(startSeconds) {
+  const audio = document.querySelector('#answer-review-audio');
+  if (!audio) {
+    setError('Spoken answers are unavailable for review.');
+    render();
+    return;
+  }
+  const target = Number(startSeconds);
+  const applySeek = () => {
+    audio.currentTime = target;
+    state.reviewAudioTime = target;
+    audio.play().catch(() => {
+      setError('Audio playback failed. You can retry from the Response Review controls.');
+      render();
+    });
+  };
+  if (audio.readyState >= 1) applySeek();
+  else audio.addEventListener('loadedmetadata', applySeek, { once: true });
 }
 
 function reflectionAudioStatus(key) {
@@ -304,6 +525,9 @@ function persistReflectionForm() {
 
 function resetSessionState() {
   clearInterval(state.timerId);
+  clearAnswerAudioUrl();
+  state.transcriptRequestId += 1;
+  resetTranscriptState();
   state.selectedModule = null;
   state.station = {
     stationTitle: '',
@@ -421,6 +645,9 @@ async function startStation() {
 
   try {
     state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    clearAnswerAudioUrl();
+    state.transcriptRequestId += 1;
+    resetTranscriptState();
     state.audioChunks = [];
     state.audioBlob = null;
     state.mediaRecorder = new MediaRecorder(state.mediaStream);
@@ -430,8 +657,10 @@ async function startStation() {
     state.mediaRecorder.addEventListener('stop', () => {
       state.audioBlob = new Blob(state.audioChunks, { type: 'audio/webm' });
       state.mediaStream.getTracks().forEach((track) => track.stop());
+      ensureAnswerAudioUrl();
       state.screen = 'reflection';
       render();
+      startTranscription();
     });
     state.phaseIndex = 0;
     state.remainingSeconds = phases[0].durationSeconds;
@@ -530,7 +759,11 @@ function advancePhase() {
     if (state.mediaRecorder?.state === 'recording') {
       state.mediaRecorder.stop();
     } else {
+      ensureAnswerAudioUrl();
       state.screen = 'reflection';
+      render();
+      startTranscription();
+      return;
     }
   }
   render();
@@ -583,6 +816,12 @@ async function saveSession() {
       module: state.selectedModule.name,
       stationTitle: state.station.stationTitle,
       reflectionAudioFiles: reflectionAudioMetadata,
+      transcript: {
+        status: state.transcript.status,
+        provider: state.transcript.provider,
+        model: state.transcript.model,
+        ...(state.transcript.error ? { error: state.transcript.error } : {}),
+      },
     });
 
     const result = await saveSessionFiles({
@@ -593,8 +832,13 @@ async function saveSession() {
       reflectionMarkdown,
       metadata,
       reflectionAudioFiles,
+      transcriptMarkdown: state.transcript.status === 'ready' ? state.transcript.markdown : null,
     });
-    setStatus(`Session saved to ${result.sessionId}.`);
+    setStatus(
+      state.transcript.status === 'ready'
+        ? `Session saved to ${result.sessionId}, including ${TRANSCRIPT_FILE_NAME}.`
+        : `Session saved to ${result.sessionId}.`,
+    );
     state.saveFolderStatus = 'ready';
   } catch (error) {
     if (String(error.message).includes('permission')) {
@@ -639,6 +883,8 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'start-station') startStation();
   if (action === 'toggle-reflection-recording') toggleReflectionRecording(actionTarget.dataset.reflectionKey);
+  if (action === 'seek-answer-segment') seekAnswerSegment(actionTarget.dataset.startSeconds);
+  if (action === 'retry-transcript') startTranscription();
   if (action === 'save-session') saveSession();
 });
 

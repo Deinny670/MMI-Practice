@@ -199,6 +199,38 @@ test('saves optional reflection audio files in the session folder', async () => 
   assert.equal(sessionFolder.files.get('reflection-01-summary.webm').content.type, 'audio/webm');
 });
 
+test('saves ready answer transcript markdown in the session folder', async () => {
+  const rootHandle = createFakeDirectoryHandle();
+
+  const result = await saveSessionFiles({
+    directoryHandle: rootHandle,
+    sessionId: '2026-08-12_09-30_ethics-decision-making',
+    questionText: 'question text',
+    reflectionMarkdown: '# Reflection',
+    metadata: {
+      sessionId: '2026-08-12_09-30_ethics-decision-making',
+      files: { transcript: 'answer-transcript.md' },
+      transcript: { status: 'ready', provider: 'openai-whisper', model: 'whisper-1' },
+    },
+    audioBlob: new Blob(['audio'], { type: 'audio/webm' }),
+    transcriptMarkdown: '# Answer Transcript\n\nI would speak privately.\n',
+  });
+
+  assert.deepEqual(result.files, [
+    'question.txt',
+    'answer.webm',
+    'reflection.md',
+    'metadata.json',
+    'answer-transcript.md',
+  ]);
+
+  const sessionFolder = rootHandle.directories.get('2026-08-12_09-30_ethics-decision-making');
+  assert.equal(
+    sessionFolder.files.get('answer-transcript.md').content,
+    '# Answer Transcript\n\nI would speak privately.\n',
+  );
+});
+
 test('persists and restores the save directory handle from IndexedDB settings', async () => {
   const indexedDB = createFakeIndexedDB();
   const handle = createFakeDirectoryHandle();

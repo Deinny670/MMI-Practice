@@ -1,0 +1,4 @@
+{
+  "proxyUrl": "http://localhost:8787/transcribe",
+  "model": "whisper-1"
+}

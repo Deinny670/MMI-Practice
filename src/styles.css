@@ -344,6 +344,59 @@ button:focus-visible {
   margin: 0;
 }
 
+.response-review {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.response-review h2,
+.response-review h3 {
+  margin: 0 0 6px;
+}
+
+.response-review audio {
+  width: 100%;
+}
+
+.segment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segment-button {
+  font-size: 0.9rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.transcript-review {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.transcript-status {
+  color: var(--muted);
+  font-weight: 700;
+  margin: 0;
+}
+
+.transcript-body {
+  background: #f9faf8;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 14px;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 720px) {
   .compact,
   .page-header,
